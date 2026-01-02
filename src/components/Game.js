@@ -1,469 +1,486 @@
-import React from "react"
-import Mark from "mark.js"
-import Result from "./Result"
-import skippedImg from "../assets/skipped.png"
-import wrongImg from "../assets/wrong.png"
+import React from "react";
+import Result from "./Result";
+import skippedImg from "../assets/skipped.png";
+import wrongImg from "../assets/wrong.png";
 
-export default function Game(props){
-export default function Game(props){
+export default function Game(props) {
+  const todaysSong = props.todaysSong;
 
-  if (!props.todaysSong) {
-    return <div>Loading song...</div>;
+  // ✅ Don't render game until we actually have a song
+  if (!todaysSong) {
+    return <div style={{ padding: 16 }}>Loading song...</div>;
   }
 
-    const [songs, setSongs] = React.useState([])
-    const [query, setQuery] = React.useState("")
-    const [visibility, setVisibility] = React.useState("hidden")
-    const [songSeconds, setSongSeconds] = React.useState(1000)
-    const [numSkips, setNumSkips] = React.useState(0)
-    const [isSkipped, setIsSkipped] = React.useState([
-        false, false, false, false, false, false
-    ])
-    const [isWrong, setIsWrong] = React.useState([
-        false, false, false, false, false, false
-    ])
-    const [skipSeconds, setSkipSeconds] = React.useState(1)
-    const [btnSrc, setBtnSrc] = React.useState("play_btn.png")
-    const [loadSeconds, setLoadSeconds] = React.useState("00")
-    const [guessTitleBackground, setGuessTitleBackground] = React.useState({
-        guess_title_0: "none",
-        guess_title_1: "none",
-        guess_title_2: "none",
-        guess_title_3: "none",
-        guess_title_4: "none",
-        guess_title_5: "none",
-    })
-    const [isGameOver, setIsGameOver] = React.useState(false)
-    const [isSuccessfulGuess, setIsSuccessfulGuess] = React.useState(false)
-    const [selectedSong, setSelectedSong] = React.useState("")
+  // Support BOTH raw Deezer + normalized song shape
+  const todaysTitle = (todaysSong.title_short || todaysSong.title || "").trim();
+  const todaysArtist = (
+    todaysSong.artist?.name || todaysSong.artist || ""
+  ).trim();
+  const todaysPreview = todaysSong.preview || "";
+  const todaysCover =
+    todaysSong.cover ||
+    todaysSong.album?.cover_medium ||
+    todaysSong.album?.cover ||
+    todaysSong.album?.cover_big ||
+    "";
 
-    const controller = new AbortController()
-    const markInstance = new Mark(document.getElementById('grid-layout'));
- 
-    const song = React.useMemo(() => new Audio(props.todaysSong.preview), [props.todaysSong.preview]);
-    const interval = React.useRef(null)
+  // Search state
+  const [songs, setSongs] = React.useState([]); // search dropdown results
+  const [query, setQuery] = React.useState("");
+  const [dropdownVisible, setDropdownVisible] = React.useState(false);
+  const [selectedSong, setSelectedSong] = React.useState(""); // "Title - Artist"
 
-    const options = {
-        method: 'GET',
-        headers: {
-            'content-type': 'application/octet-stream',
-            'X-RapidAPI-Key': process.env.REACT_APP_RAPID_API_KEY,
-            'X-RapidAPI-Host': 'deezerdevs-deezer.p.rapidapi.com'
-        }
+  // Game state
+  const [songSeconds, setSongSeconds] = React.useState(1000);
+  const [numSkips, setNumSkips] = React.useState(0);
+  const [skipSeconds, setSkipSeconds] = React.useState(1);
+  const [btnSrc, setBtnSrc] = React.useState("play_btn.png");
+  const [loadSeconds, setLoadSeconds] = React.useState("00");
+  const [isGameOver, setIsGameOver] = React.useState(false);
+  const [isSuccessfulGuess, setIsSuccessfulGuess] = React.useState(false);
+
+  // guesses UI
+  const [guessValues, setGuessValues] = React.useState(["", "", "", "", "", ""]);
+  const [guessBg, setGuessBg] = React.useState(["none", "none", "none", "none", "none", "none"]);
+  const [isSkipped, setIsSkipped] = React.useState([false, false, false, false, false, false]);
+  const [isWrong, setIsWrong] = React.useState([false, false, false, false, false, false]);
+
+  // Progress bars (6 segments)
+  const [filledBars, setFilledBars] = React.useState([true, false, false, false, false, false]);
+
+  // Audio
+  const audioRef = React.useRef(null);
+  const intervalRef = React.useRef(null);
+
+  React.useEffect(() => {
+    // Reset audio when today's preview changes
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+    }
+
+    audioRef.current = todaysPreview ? new Audio(todaysPreview) : null;
+
+    // cleanup
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current.currentTime = 0;
+      }
     };
+  }, [todaysPreview]);
 
-    async function getSearchSongs(query, signal) {
+  // RapidAPI Deezer config
+  const options = React.useMemo(
+    () => ({
+      method: "GET",
+      headers: {
+        "content-type": "application/octet-stream",
+        "X-RapidAPI-Key": process.env.REACT_APP_RAPID_API_KEY,
+        "X-RapidAPI-Host": "deezerdevs-deezer.p.rapidapi.com",
+      },
+    }),
+    []
+  );
 
-        async function presentResults(query){
-            return new Promise(async(resolve, reject) => {
+  // Debounce + AbortController
+  const debounceTimerRef = React.useRef(null);
+  const controllerRef = React.useRef(null);
 
-                if (signal?.aborted){
-                    reject(signal.reason)
-                }
-            
-                const apiUrl = `https://deezerdevs-deezer.p.rapidapi.com/search?q=${query}`;
-    
-                try {
-                    const res = await fetch(apiUrl, options);
-                    const data = await res.json()
-        
-                    if (data.data !== undefined){
-                        resolve(data.data)
-                    }
-                    
-                } catch (error) {
-                    reject(error);
-                }
-            })
-        }
+  async function fetchSearchSongs(q, signal) {
+    const apiUrl = `https://deezerdevs-deezer.p.rapidapi.com/search?q=${encodeURIComponent(q)}`;
+    const res = await fetch(apiUrl, { ...options, signal });
 
-        try {
-            const search_results = await presentResults(query)
- 
-            var songResults = []
-            
-            search_results.forEach(x => {
-                if (!songResults.some(e => e.title_short.includes(x.title_short) && e.artist_id === x.artist.id)){
-                    songResults.push({title_short: x.title_short, artist: x.artist.name, artist_id: x.artist.id})
-                }
-            })
-            
-            setSongs(songResults)
-    
-            const container = document.getElementById("grid-layout");
-
-            if (container != null){
-    
-                while (container.firstChild) {
-                    container.removeChild(container.firstChild);
-                }
-    
-                for (var i=0; i<songResults.length; i++){
-                    const div = document.createElement("div");
-                    div.id = "song-" + i
-                    div.className = "grid-layout-song";
-                    var songTitleArtist = songResults[i].title_short + " - " + songResults[i].artist
-                    div.innerText = songTitleArtist
-                    container.appendChild(div);
-                }
-    
-                if (container.firstChild){
-                    setVisibility("visible")
-                }
-            }
-
-            markInstance.unmark()
-            markInstance.mark(query)
-
-        } catch(e){
-            return
-        }
-        
+    if (!res.ok) {
+      const text = await res.text();
+      console.error("Search failed:", res.status, text);
+      return [];
     }
 
-    // Define debounce function
-    const debounce = (fn, delay = 500) => { 
-        let timerId = null; 
-        return (...args) => { 
-            clearTimeout(timerId); 
-            timerId = setTimeout(() => fn(...args), delay); 
-        }; 
+    const data = await res.json();
+    if (!data || !Array.isArray(data.data)) return [];
+
+    // de-dupe and normalize results
+    const out = [];
+    for (const x of data.data) {
+      const title_short = x?.title_short || x?.title || "";
+      const artistName = x?.artist?.name || "";
+      const artistId = x?.artist?.id;
+
+      if (!title_short || !artistName) continue;
+
+      if (!out.some((e) => e.title_short === title_short && e.artist_id === artistId)) {
+        out.push({ title_short, artist: artistName, artist_id: artistId });
+      }
+    }
+    return out;
+  }
+
+  React.useEffect(() => {
+    // clear previous debounce
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+
+    // abort previous request
+    controllerRef.current?.abort();
+    controllerRef.current = new AbortController();
+    const signal = controllerRef.current.signal;
+
+    if (!query || query.trim().length === 0) {
+      setSongs([]);
+      setDropdownVisible(false);
+      return;
+    }
+
+    debounceTimerRef.current = setTimeout(async () => {
+      try {
+        const results = await fetchSearchSongs(query.trim(), signal);
+        setSongs(results);
+        setDropdownVisible(results.length > 0);
+      } catch (e) {
+        // ignore abort errors
+      }
+    }, 350);
+
+    return () => {
+      controllerRef.current?.abort("cancel");
+      if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     };
+  }, [query, options]);
 
-    // Create a debounced version of the getSearchSongs function
-    const debouncedApiCall = debounce(getSearchSongs);
+  function inputChange(value) {
+    setQuery(value);
+    setSelectedSong("");
+    setDropdownVisible(true);
+  }
 
-    React.useEffect(() => {
-        const signal = controller.signal
+  function chooseSong(item) {
+    const text = `${item.title_short} - ${item.artist}`;
+    setSelectedSong(text);
+    setQuery(text);
+    setDropdownVisible(false);
+  }
 
-        if (query.length === 0){
-            setSongs([])
-            setVisibility("hidden")
-            return
-        }
+  function stopAudio() {
+    const a = audioRef.current;
+    if (!a) return;
 
-        debouncedApiCall(query, signal);
+    a.pause();
+    a.currentTime = 0;
+    setBtnSrc("play_btn.png");
+    setLoadSeconds("00");
 
-        return () => {
-            controller.abort("cancel")
-        }
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+  }
 
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [query])
+  function previewSong() {
+    const a = audioRef.current;
+    if (!a) return;
 
-    // hide search results when clicking outside input element
-    // else show it again only when there are already results
-    // and the input search box is not empty
-    React.useEffect(() => {
-
-        const handleSongClick = (e) => {
-            e.preventDefault()
-            e.stopPropagation()
-       
-            setVisibility("hidden")
-
-            var song_id = e.currentTarget.id.split("-")[1]
-            if (songs[song_id] != null){
-                var song_title = songs[song_id].title_short + " - " + songs[song_id].artist
-                setSelectedSong(song_title)
-                document.getElementById("search-input").value = selectedSong
-            }
-        }
-
-        const handleInput = (e) => {
-            e.preventDefault()
-            e.stopPropagation();
-
-            if (songs.length > 0 && query.length > 0){
-                setVisibility("visible")
-            }
-            else {
-                setVisibility("hidden")
-            }
-        }
-
-        var songElements = document.getElementsByClassName("grid-layout-song");
-        document.getElementById("search-input").addEventListener("click", handleInput)
-
-        for (var i=0; i<songElements.length; i++) {
-            songElements[i].addEventListener("click", handleSongClick);
-        }
-
-        return () => {
-            for (var i=0; i<songElements.length; i++) {
-                songElements[i].removeEventListener("click", handleSongClick);
-            }
-            document.getElementById("search-input").removeEventListener('click', handleInput)
-        }
-    }, [query, songs, selectedSong])
-
-    // update query based on users input
-    function inputChange(value){
-        if (value != null){
-            setQuery(value)
-            setSelectedSong("")
-        }
-        else {
-            setSelectedSong(selectedSong)
-        }
+    // toggle pause
+    if (!a.paused) {
+      stopAudio();
+      return;
     }
 
-    function previewSong(){
+    stopAudio();
 
-        setLoadSeconds("00")
+    // start timer display
+    intervalRef.current = setInterval(() => {
+      setLoadSeconds((prev) => {
+        let secs = parseInt(prev, 10);
+        if (Number.isNaN(secs)) secs = 0;
+        secs += 1;
 
-        if (!song.paused){
-            song.pause()
-            song.currentTime = 0
-            setBtnSrc("play_btn.png")
-            setLoadSeconds("00")
-            clearInterval(interval.current)
-            interval.current = null
-            return
+        if (secs >= songSeconds / 1000) {
+          if (intervalRef.current) {
+            clearInterval(intervalRef.current);
+            intervalRef.current = null;
+          }
+          setBtnSrc("play_btn.png");
         }
 
-        song.pause()
-        song.currentTime = 0
+        return secs < 10 ? `0${secs}` : `${secs}`;
+      });
+    }, 1000);
 
-        function loadTimeBar() {
-            interval.current = setInterval(time, 1000)
-
-            function time(){
-
-                setLoadSeconds((prevLoadSeconds) => {
-                    var secs = parseInt(prevLoadSeconds)
-                    secs += 1
-                    if (secs < 10){
-                        secs = "0" + secs
-                    }
-                    if (secs >= songSeconds/1000){
-                        clearInterval(interval.current)
-                        interval.current = null
-                        setBtnSrc("play_btn.png")
-                    }
-                    return secs
-                })
-            }
-        }
-        
-        var playPromise = song.play()
-
-        if (playPromise !== undefined){
-            playPromise.then(function() {
-                setBtnSrc("pause_btn.png")
-                loadTimeBar()
-                setTimeout(() => { 
-                    song.pause(); 
-                }, songSeconds);
-            })
-            .catch(error => {
-                console.log(error)
-            })
-        }
-    }
-
-    // on Skip button click, increase songs playtime, buttons seconds
-    // and fill respective progress bar and increase
-    function skipSongSeconds(skipped){
-
-        var guess_title = document.getElementById("guess_title_" + numSkips)
-
-        var skip_icon = skippedImg
-
-        if (skipped){ 
-            guess_title.value = "SKIPPED"
-            setIsSkipped( prevIsSkipped => {
-                const result = [...prevIsSkipped];
-                result[numSkips] = true;
-                return result;
-            })
-        }
-        else {
-            var song_selected = document.getElementById("search-input").value
-            guess_title.value = song_selected
-            skip_icon = wrongImg
-        }
-
-        setGuessTitleBackground( prevGuessTitleBackground => ({
-            ...prevGuessTitleBackground,
-            ["guess_title_" + numSkips]: skip_icon
-        }))
-
-        song.pause()
-        song.currentTime = 0
-        setBtnSrc("play_btn.png")
-        setLoadSeconds("00")
-        clearInterval(interval.current)
-        interval.current = null
-
-        if (numSkips === 5){
-            setIsGameOver(true)
-            return
-        }
-
-        var elem2 = document.getElementById("time-2");
-        var elem3 = document.getElementById("time-3");  
-        var elem4 = document.getElementById("time-4");
-        var elem5 = document.getElementById("time-5");  
-        var elem6 = document.getElementById("time-6");
-
-        setNumSkips((prevNumSkips) => {
-            var newNumSkips = prevNumSkips + 1
-
-            if (newNumSkips === 0){
-                setSongSeconds(1000)
-                setSkipSeconds(1)
-            }
-            else if (newNumSkips === 1){
-                setSongSeconds(2000)
-                setSkipSeconds(2)
-                elem2.style.width = '100%';
-            }
-            else if (newNumSkips === 2){
-                setSongSeconds(4000)
-                setSkipSeconds(3)
-                elem3.style.width = '100%';
-            }
-            else if (newNumSkips === 3){
-                setSongSeconds(7000)
-                setSkipSeconds(4)
-                elem4.style.width = '100%';
-            }
-            else if (newNumSkips === 4){
-                setSongSeconds(11000)
-                setSkipSeconds(5)
-                elem5.style.width = '100%';
-            }
-            else if (newNumSkips === 5){
-                setSongSeconds(16000)
-                elem6.style.width = '100%';
-            }
-
-            return newNumSkips
-        })     
-    }
-
-    function submitAnswer(){
-        var song = document.getElementById("search-input").value
-
-        if (song.trim().length === 0){
-            skipSongSeconds(true)
-            return
-        }
-
-        var song_title = song.split("-")[0] != null ? song.split("-")[0].trim() : ""
-        var song_artist = song.split("-")[1] != null ? song.split("-")[1].trim() : ""
-
-       var todays_song_title = props.todaysSong.title
-       var todays_song_artist = props.todaysSong.artist?.name || props.todaysSong.artist
-
-
-        if (song_title === todays_song_title && song_artist === todays_song_artist){
-            setIsGameOver(true)
-            setIsSuccessfulGuess(true)
-        }
-        else {
-            skipSongSeconds()
-            setIsWrong( prevIsWrong => {
-                const result = [...prevIsWrong];
-                result[numSkips] = true;
-                return result;
-            })
-        }
-    }
-
-    function seeTodaysAnswer(){
-        setIsSkipped( prevIsSkipped => {
-            for (var i=numSkips; i<7; i++){
-                prevIsSkipped[i] = true
-            }
-            return prevIsSkipped;
+    const playPromise = a.play();
+    if (playPromise && typeof playPromise.then === "function") {
+      playPromise
+        .then(() => {
+          setBtnSrc("pause_btn.png");
+          setTimeout(() => {
+            a.pause();
+            setBtnSrc("play_btn.png");
+          }, songSeconds);
         })
-        setIsGameOver(true)
+        .catch((err) => {
+          console.log("Audio play blocked:", err);
+          // If browser blocks autoplay, user must click again — that's OK.
+          stopAudio();
+        });
+    }
+  }
+
+  function advanceTimeSettings(newNumSkips) {
+    // Update playback time + skip display + bars
+    const newBars = [true, false, false, false, false, false];
+    for (let i = 1; i <= Math.min(newNumSkips, 5); i++) newBars[i] = true;
+    setFilledBars(newBars);
+
+    if (newNumSkips === 0) {
+      setSongSeconds(1000);
+      setSkipSeconds(1);
+    } else if (newNumSkips === 1) {
+      setSongSeconds(2000);
+      setSkipSeconds(2);
+    } else if (newNumSkips === 2) {
+      setSongSeconds(4000);
+      setSkipSeconds(3);
+    } else if (newNumSkips === 3) {
+      setSongSeconds(7000);
+      setSkipSeconds(4);
+    } else if (newNumSkips === 4) {
+      setSongSeconds(11000);
+      setSkipSeconds(5);
+    } else if (newNumSkips === 5) {
+      setSongSeconds(16000);
+    }
+  }
+
+  function markGuess({ skipped, wrong, text }) {
+    // write into current guess slot (numSkips)
+    const idx = numSkips;
+
+    setGuessValues((prev) => {
+      const copy = [...prev];
+      copy[idx] = text;
+      return copy;
+    });
+
+    setGuessBg((prev) => {
+      const copy = [...prev];
+      copy[idx] = skipped ? skippedImg : wrong ? wrongImg : "none";
+      return copy;
+    });
+
+    if (skipped) {
+      setIsSkipped((prev) => {
+        const copy = [...prev];
+        copy[idx] = true;
+        return copy;
+      });
     }
 
-    if (!isGameOver){
-        return (
-            <div>
-                <div className="game-guess-title">
-                    <input id="guess_title_0" type="text" disabled style={{backgroundImage: guessTitleBackground.guess_title_0 !== "none" ? "url("+guessTitleBackground.guess_title_0+")" : "none"}} />
-                    <input id="guess_title_1" type="text" disabled style={{backgroundImage: guessTitleBackground.guess_title_1 !== "none" ? "url("+guessTitleBackground.guess_title_1+")" : "none"}} />
-                    <input id="guess_title_2" type="text" disabled style={{backgroundImage: guessTitleBackground.guess_title_2 !== "none" ? "url("+guessTitleBackground.guess_title_2+")" : "none"}} />
-                    <input id="guess_title_3" type="text" disabled style={{backgroundImage: guessTitleBackground.guess_title_3 !== "none" ? "url("+guessTitleBackground.guess_title_3+")" : "none"}} />
-                    <input id="guess_title_4" type="text" disabled style={{backgroundImage: guessTitleBackground.guess_title_4 !== "none" ? "url("+guessTitleBackground.guess_title_4+")" : "none"}} />
-                    <input id="guess_title_5" type="text" disabled style={{backgroundImage: guessTitleBackground.guess_title_5 !== "none" ? "url("+guessTitleBackground.guess_title_5+")" : "none"}} />
-                </div>
-                <div className="game-main">
-                    <div className="outer-container">
-                        <div className="inner-container">
-                            <div className="game-time">
-                                <span className="game-time-grid" >
-                                    <div id="time-1" style={{width:"100%"}} className="game-time-grid-loaded"></div>
-                                </span>
-                                <span className="game-time-grid" >
-                                    <div id="time-2" className="game-time-grid-loaded"></div>
-                                </span>
-                                <span className="game-time-grid" >
-                                    <div id="time-3" className="game-time-grid-loaded"></div>
-                                </span>
-                                <span className="game-time-grid" >
-                                    <div id="time-4" className="game-time-grid-loaded"></div>
-                                </span>
-                                <span className="game-time-grid" >
-                                    <div id="time-5" className="game-time-grid-loaded"></div>
-                                </span>
-                                <span className="game-time-grid" >
-                                    <div id="time-6" className="game-time-grid-loaded"></div>
-                                </span>
-                            </div>
-                            <div className="game-time-play">
-                                <p>0:{loadSeconds}</p>
-                                <img 
-                                    className="game-play-btn" 
-                                    src={require("../assets/"+btnSrc)} 
-                                    alt="play button" 
-                                    width="40" 
-                                    height="40" 
-                                    onClick={previewSong}
-                                />
-                                <p>0:16</p>
-                            </div>
-                            <div className="game-guess-title">
-                                <div 
-                                    id="grid-layout" 
-                                    className="grid-layout" 
-                                    style={{visibility:visibility}}>
-                                </div>
-                                <input 
-                                    id="search-input" 
-                                    type="text" 
-                                    placeholder="Know it? Search for the artist / title"
-                                    onChange={event => inputChange(event.target.value)}
-                                    value={selectedSong !== "" ? selectedSong : query}
-                                />
-                            </div>
-                            <div className="game-buttons">
-                                <button className="skip-btn" onClick={() => skipSongSeconds(true)}>
-                                    {numSkips === 5 ? "SKIP" : `SKIP (+${skipSeconds})`}
-                                    </button>
-                                <button className="submit-btn" onClick={submitAnswer}>SUBMIT</button>
-                            </div>
-                            <span className="todays-answer-btn" onClick={seeTodaysAnswer}>See today's answer</span>
-                        </div>
-                    </div>
-                </div>
+    if (wrong) {
+      setIsWrong((prev) => {
+        const copy = [...prev];
+        copy[idx] = true;
+        return copy;
+      });
+    }
+  }
+
+  function skipSongSeconds(skipped) {
+    stopAudio();
+
+    if (skipped) {
+      markGuess({ skipped: true, wrong: false, text: "SKIPPED" });
+    } else {
+      const typed = (selectedSong || query || "").trim();
+      markGuess({ skipped: false, wrong: true, text: typed || "WRONG" });
+    }
+
+    if (numSkips === 5) {
+      setIsGameOver(true);
+      return;
+    }
+
+    setNumSkips((prev) => {
+      const next = prev + 1;
+      advanceTimeSettings(next);
+      return next;
+    });
+  }
+
+  function submitAnswer() {
+    const typed = (selectedSong || query || "").trim();
+
+    if (typed.length === 0) {
+      skipSongSeconds(true);
+      return;
+    }
+
+    const parts = typed.split("-");
+    const guessTitle = (parts[0] || "").trim();
+    const guessArtist = (parts[1] || "").trim();
+
+    // Compare case-insensitive
+    const ok =
+      guessTitle.toLowerCase() === todaysTitle.toLowerCase() &&
+      guessArtist.toLowerCase() === todaysArtist.toLowerCase();
+
+    if (ok) {
+      setIsGameOver(true);
+      setIsSuccessfulGuess(true);
+    } else {
+      skipSongSeconds(false);
+    }
+  }
+
+  function seeTodaysAnswer() {
+    // mark remaining as skipped
+    setIsSkipped((prev) => {
+      const copy = [...prev];
+      for (let i = numSkips; i < copy.length; i++) copy[i] = true;
+      return copy;
+    });
+    setIsGameOver(true);
+  }
+
+  if (isGameOver) {
+    return (
+      <Result
+        todaysSong={props.todaysSong}
+        songSeconds={songSeconds}
+        isSuccessfulGuess={isSuccessfulGuess}
+        numSkips={numSkips}
+        isSkipped={isSkipped}
+        isWrong={isWrong}
+      />
+    );
+  }
+
+  return (
+    <div onClick={() => setDropdownVisible(false)}>
+      <div className="game-guess-title">
+        {guessValues.map((val, i) => (
+          <input
+            key={i}
+            id={`guess_title_${i}`}
+            type="text"
+            disabled
+            value={val}
+            style={{
+              backgroundImage: guessBg[i] !== "none" ? `url(${guessBg[i]})` : "none",
+            }}
+            readOnly
+          />
+        ))}
+      </div>
+
+      <div className="game-main">
+        <div className="outer-container">
+          <div className="inner-container">
+            <div className="game-time">
+              {filledBars.map((filled, i) => (
+                <span className="game-time-grid" key={i}>
+                  <div
+                    id={`time-${i + 1}`}
+                    className="game-time-grid-loaded"
+                    style={{ width: filled ? "100%" : "0%" }}
+                  />
+                </span>
+              ))}
             </div>
-        )
-    }
-    else {
-        return <Result 
-            todaysSong={props.todaysSong} 
-            songSeconds={songSeconds} 
-            isSuccessfulGuess={isSuccessfulGuess} 
-            numSkips={numSkips}
-            isSkipped={isSkipped}
-            isWrong={isWrong}
-        />
-    }
-    
+
+            <div className="game-time-play">
+              <p>0:{loadSeconds}</p>
+              <img
+                className="game-play-btn"
+                src={require("../assets/" + btnSrc)}
+                alt="play button"
+                width="40"
+                height="40"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  previewSong();
+                }}
+              />
+              <p>0:16</p>
+            </div>
+
+            {/* Optional: show cover if you want */}
+            {todaysCover ? (
+              <img
+                src={todaysCover}
+                alt="cover"
+                style={{ display: "none" }} // keep hidden if your UI doesn't use it yet
+              />
+            ) : null}
+
+            <div className="game-guess-title" onClick={(e) => e.stopPropagation()}>
+              <div
+                id="grid-layout"
+                className="grid-layout"
+                style={{ visibility: dropdownVisible ? "visible" : "hidden" }}
+              >
+                {dropdownVisible &&
+                  songs.map((s, i) => (
+                    <div
+                      key={`${s.title_short}-${s.artist_id}-${i}`}
+                      className="grid-layout-song"
+                      onClick={() => chooseSong(s)}
+                      style={{ cursor: "pointer" }}
+                    >
+                      {s.title_short} - {s.artist}
+                    </div>
+                  ))}
+              </div>
+
+              <input
+                id="search-input"
+                type="text"
+                placeholder="Know it? Search for the artist / title"
+                onChange={(event) => inputChange(event.target.value)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (songs.length > 0 && query.length > 0) setDropdownVisible(true);
+                }}
+                value={selectedSong !== "" ? selectedSong : query}
+              />
+            </div>
+
+            <div className="game-buttons">
+              <button
+                className="skip-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  skipSongSeconds(true);
+                }}
+              >
+                {numSkips === 5 ? "SKIP" : `SKIP (+${skipSeconds})`}
+              </button>
+              <button
+                className="submit-btn"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  submitAnswer();
+                }}
+              >
+                SUBMIT
+              </button>
+            </div>
+
+            <span
+              className="todays-answer-btn"
+              onClick={(e) => {
+                e.stopPropagation();
+                seeTodaysAnswer();
+              }}
+              style={{ cursor: "pointer" }}
+            >
+              See today's answer
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
 }
