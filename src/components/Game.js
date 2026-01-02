@@ -354,8 +354,9 @@ export default function Game(props){
         var song_title = song.split("-")[0] != null ? song.split("-")[0].trim() : ""
         var song_artist = song.split("-")[1] != null ? song.split("-")[1].trim() : ""
 
-        var todays_song_title = props.todaysSong.title_short
-        var todays_song_artist = props.todaysSong.artist.name
+       var todays_song_title = props.todaysSong.title
+       var todays_song_artist = props.todaysSong.artist?.name || props.todaysSong.artist
+
 
         if (song_title === todays_song_title && song_artist === todays_song_artist){
             setIsGameOver(true)
