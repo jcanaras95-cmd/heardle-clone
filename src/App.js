@@ -13,32 +13,43 @@ export default function App(){
     var playlist_ids = [14779578423]
     var playlist = playlist_ids[Math.floor(Math.random() * playlist_ids.length)];
 
-    async function getTodaysSong() {
+   async function getTodaysSong() {
+  const options = {
+    method: "GET",
+    headers: {
+      "content-type": "application/octet-stream",
+      "X-RapidAPI-Key": process.env.REACT_APP_RAPID_API_KEY,
+      "X-RapidAPI-Host": "deezerdevs-deezer.p.rapidapi.com",
+    },
+  };
 
-        const options = {
-            method: 'GET',
-            headers: {
-                'content-type': 'application/octet-stream',
-                'X-RapidAPI-Key': process.env.REACT_APP_RAPID_API_KEY,
-                'X-RapidAPI-Host': 'deezerdevs-deezer.p.rapidapi.com'
-            }
-        };
+  const url = `https://deezerdevs-deezer.p.rapidapi.com/playlist/${playlist}`;
 
-        try {
-            const url = 'https://deezerdevs-deezer.p.rapidapi.com/playlist/'+playlist;
+  try {
+    const response = await fetch(url, options);
 
-            const response = await fetch(url, options);
-            const result = await response.json();
-            var random_song = result.tracks.data[Math.floor(Math.random() * result.tracks.data.length)];
-
-            if (random_song != null){
-                setTodaysSong(random_song)
-            }
-
-        } catch (error) {
-            console.error(error);
-        }
+    // If RapidAPI returns 401/403/etc, this will catch it early
+    if (!response.ok) {
+      const text = await response.text();
+      console.error("Deezer fetch failed:", response.status, text);
+      return;
     }
+
+    const result = await response.json();
+
+    const tracks = result?.tracks?.data;
+    if (!Array.isArray(tracks) || tracks.length === 0) {
+      console.error("Unexpected Deezer response shape:", result);
+      return;
+    }
+
+    const random_song = tracks[Math.floor(Math.random() * tracks.length)];
+    setTodaysSong(random_song);
+  } catch (error) {
+    console.error("Deezer fetch exception:", error);
+  }
+}
+
 
     React.useEffect(() => {
         getTodaysSong()
