@@ -1,6 +1,6 @@
 {
   "name": "heardle",
-  "homepage": "https://alexflorides.github.io/heardle-clone/",
+  "homepage": ".",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
