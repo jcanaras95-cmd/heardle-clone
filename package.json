@@ -1,6 +1,6 @@
 {
   "name": "heardle",
-  "homepage": ".",
+  "homepage": "/heardle-clone",
   "version": "0.1.0",
   "private": true,
   "dependencies": {
