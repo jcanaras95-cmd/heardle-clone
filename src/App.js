@@ -12,6 +12,14 @@ export default function App(){
 
     var playlist_ids = [14779578423]
     var playlist = playlist_ids[Math.floor(Math.random() * playlist_ids.length)];
+export default function Game({ todaysSong }) {
+
+  if (!todaysSong) {
+    return <div>Loading song...</div>;
+  }
+
+  // rest of your game code BELOW
+}
 
    async function getTodaysSong() {
   const options = {
