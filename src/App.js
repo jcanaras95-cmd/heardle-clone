@@ -4,7 +4,7 @@ import Game from "./components/Game"
 
 export default function App(){
 
-    const [todaysSong, setTodaysSong] = React.useState([])
+    const [todaysSong, setTodaysSong] = React.useState(null)
 
     // '00s Hits' Playlist ID: 248297032
     // 'HITS 2023 - Today's Top Songs' Playlist ID: 9890417302
