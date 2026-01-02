@@ -5,6 +5,11 @@ import skippedImg from "../assets/skipped.png"
 import wrongImg from "../assets/wrong.png"
 
 export default function Game(props){
+export default function Game(props){
+
+  if (!props.todaysSong) {
+    return <div>Loading song...</div>;
+  }
 
     const [songs, setSongs] = React.useState([])
     const [query, setQuery] = React.useState("")
